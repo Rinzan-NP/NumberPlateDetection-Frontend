@@ -1,4 +1,22 @@
-dist
-node_modules
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build
+dist/
+
+# Environment & Local
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# System & OS
 .DS_Store
-*.local
+Thumbs.db
+*.sw?
