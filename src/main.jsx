@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import './index.css'
 
 function App() {
-  const [activeTab, setActiveTab] = useState('image') // 'image' | 'heatmap' | 'model' | 'train'
+  const [activeTab, setActiveTab] = useState('video') // 'video' | 'image' | 'heatmap' | 'model' | 'train'
   const [viewMode, setViewMode] = useState('bbox') // 'bbox' | 'heatmap' | 'compare'
   const [modelInfo, setModelInfo] = useState(null)
   const [samples, setSamples] = useState({ images: [], videos: [] })
@@ -18,14 +18,20 @@ function App() {
   const [dragOver, setDragOver] = useState(false)
   const imageInputRef = useRef(null)
 
-  // Video Mode State
+  // Video & Real-Time Road Surveillance State
   const [videoFile, setVideoFile] = useState(null)
   const [videoPreviewUrl, setVideoPreviewUrl] = useState(null)
   const [videoResult, setVideoResult] = useState(null)
   const [videoLoading, setVideoLoading] = useState(false)
   const [videoError, setVideoError] = useState(null)
-  const [videoStride, setVideoStride] = useState(3)
+  const [videoStride, setVideoStride] = useState(2)
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0)
+  const [selectedVehicleTrackId, setSelectedVehicleTrackId] = useState(null)
+  const [videoFilterLane, setVideoFilterLane] = useState('ALL')
+  const [videoSearchTerm, setVideoSearchTerm] = useState('')
+  const [surveillanceMode, setSurveillanceMode] = useState('live') // 'live' | 'all'
   const videoInputRef = useRef(null)
+  const videoPlayerRef = useRef(null)
 
   // Training Hub State
   const [trainConfig, setTrainConfig] = useState({ epochs: 15, batch: 16, device: 'mps' })
@@ -168,10 +174,12 @@ function App() {
     }
   }
 
-  const handleSelectSampleVideo = async (sampleName) => {
+  const handleSelectSampleVideo = async (sampleName = 'road_surveillance_traffic.mp4') => {
     setVideoResult(null)
     setVideoError(null)
     setVideoLoading(true)
+    setSelectedVehicleTrackId(null)
+    setVideoCurrentTime(0)
 
     const formData = new FormData()
     formData.append('sample_name', sampleName)
@@ -189,28 +197,36 @@ function App() {
     }
   }
 
+  const handleJumpToVehicle = (firstSeenSec, trackId) => {
+    setSelectedVehicleTrackId(trackId)
+    if (videoPlayerRef.current) {
+      videoPlayerRef.current.currentTime = Math.max(0, firstSeenSec - 0.2)
+      videoPlayerRef.current.play()
+    }
+  }
+
   const exportVideoLogJSON = () => {
     if (!videoResult?.plates) return
     const blob = new Blob([JSON.stringify(videoResult, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `anpr_video_log_${Date.now()}.json`
+    a.download = `anpr_surveillance_log_${Date.now()}.json`
     a.click()
   }
 
   const exportVideoLogCSV = () => {
     if (!videoResult?.plates) return
-    const headers = ['Track ID', 'Plate Number', 'State', 'First Seen (s)', 'Last Seen (s)', 'Duration (s)', 'Confidence', 'Frames Count']
+    const headers = ['Track ID', 'Plate Number', 'State', 'Lane', 'Speed (km/h)', 'First Seen (s)', 'Last Seen (s)', 'Duration (s)', 'Confidence', 'Frames Count']
     const rows = videoResult.plates.map(p => [
-      p.track_id, `"${p.plate_number}"`, `"${p.state || 'N/A'}"`, p.first_seen_sec, p.last_seen_sec, p.duration_sec, `${Math.round(p.confidence * 100)}%`, p.detections_count
+      p.track_id, `"${p.plate_number}"`, `"${p.state || 'N/A'}"`, `"${p.lane || 'N/A'}"`, p.speed_kmh || 'N/A', p.first_seen_sec, p.last_seen_sec, p.duration_sec, `${Math.round(p.confidence * 100)}%`, p.detections_count
     ])
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `anpr_plate_log_${Date.now()}.csv`
+    a.download = `anpr_surveillance_log_${Date.now()}.csv`
     a.click()
   }
 
@@ -283,11 +299,11 @@ function App() {
           </div>
         </div>
 
-        {/* Navigation Tabs (Light Theme - Video ANPR Unhidden) */}
+        {/* Navigation Tabs (Light Theme - Road Surveillance Prioritized) */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-2 border-t border-slate-100 overflow-x-auto">
           {[
+            { id: 'video', label: 'Road Surveillance CCTV & Tracker', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z', isLive: true },
             { id: 'image', label: 'License Plate Recognition', icon: 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z' },
-            { id: 'video', label: 'Video Tracking & Surveillance', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
             { id: 'heatmap', label: 'Neural Heatmap & Attention', icon: 'M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z' },
             { id: 'model', label: 'Model Metrics & Architecture', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
             { id: 'train', label: 'Dataset & Training Hub', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
@@ -305,6 +321,11 @@ function App() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={tab.icon} />
               </svg>
               {tab.label}
+              {tab.isLive && (
+                <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-600 text-white animate-pulse">
+                  LIVE
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -621,216 +642,506 @@ function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 2: VIDEO TRACKING & SURVEILLANCE */}
+        {/* TAB 1: REAL-TIME ROAD SURVEILLANCE & VEHICLE TRACKER */}
         {/* ========================================================= */}
-        {activeTab === 'video' && (
-          <div className="space-y-6">
-            {/* Video Controls & Presets */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-                  <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  Video ANPR & Multi-Object Vehicle Tracker
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">Tracks vehicles across video frames using IoU matching and performs temporal OCR consensus voting</p>
-              </div>
+        {activeTab === 'video' && (() => {
+          const allPlates = videoResult?.plates || []
+          const activePlatesInFov = allPlates.filter(
+            p => videoCurrentTime >= (p.first_seen_sec - 0.25) && videoCurrentTime <= (p.last_seen_sec + 0.45)
+          )
+          const loggedPlates = allPlates.filter(p => videoCurrentTime >= p.first_seen_sec)
+          const upcomingPlates = allPlates.filter(p => videoCurrentTime < p.first_seen_sec)
 
-              <div className="flex items-center gap-3">
-                {/* Frame Stride Selector */}
-                <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
-                  <span className="text-slate-500 font-medium">Stride:</span>
-                  {[2, 3, 4].map(s => (
-                    <button
-                      key={s}
-                      onClick={() => setVideoStride(s)}
-                      className={`px-2 py-0.5 rounded font-mono ${
-                        videoStride === s ? 'bg-emerald-600 text-white font-bold' : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {s}x
-                    </button>
-                  ))}
+          // Filter by search query and lane
+          const filterFn = (p) => {
+            const matchesSearch = !videoSearchTerm || 
+              p.plate_number.toLowerCase().includes(videoSearchTerm.toLowerCase()) ||
+              (p.state && p.state.toLowerCase().includes(videoSearchTerm.toLowerCase()))
+            const matchesLane = videoFilterLane === 'ALL' || (p.lane && p.lane.toLowerCase().includes(videoFilterLane.toLowerCase()))
+            return matchesSearch && matchesLane
+          }
+
+          const displayedPlates = (surveillanceMode === 'live' ? loggedPlates : allPlates).filter(filterFn)
+
+          return (
+            <div className="space-y-6">
+              {/* Surveillance Gantry Top Banner */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-600"></span>
+                    </span>
+                    <h3 className="font-bold text-slate-900 text-base">
+                      NH-48 Expressway Multi-Lane ANPR Road Surveillance
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-[11px] font-mono font-bold border border-emerald-200">
+                      CAM-04 NORTHBOUND · KM 142.6
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Real-time automated vehicle detection, multi-object IoU trajectory tracking, and temporal OCR plate identification
+                  </p>
                 </div>
 
-                {/* Preset Sample Video Button */}
-                {samples.videos && samples.videos.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Stride Selector */}
+                  <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs">
+                    <span className="text-slate-500 font-medium text-[11px]">Stride:</span>
+                    {[2, 3, 4].map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setVideoStride(s)}
+                        className={`px-2 py-0.5 rounded font-mono text-[11px] ${
+                          videoStride === s ? 'bg-emerald-600 text-white font-bold' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {s}x
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Preset Surveillance Demo Button */}
                   <button
-                    onClick={() => handleSelectSampleVideo(samples.videos[0].name)}
+                    onClick={() => handleSelectSampleVideo('road_surveillance_traffic.mp4')}
                     disabled={videoLoading}
-                    className="px-4 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-xs font-semibold text-emerald-800 border border-emerald-300 flex items-center gap-2 transition-all shadow-xs"
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 transition-all shadow-sm shadow-emerald-600/20"
                   >
-                    <svg className="w-4 h-4 text-emerald-600" fill="currentColor" viewBox="0 0 20 20">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
                     </svg>
-                    Test Demo Video
+                    ▶ Start Live Highway Stream
                   </button>
-                )}
 
-                <button
-                  onClick={() => videoInputRef.current?.click()}
-                  disabled={videoLoading}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-500/20 flex items-center gap-2 transition-all"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  <button
+                    onClick={() => videoInputRef.current?.click()}
+                    disabled={videoLoading}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-200 flex items-center gap-1.5 transition-all"
+                  >
+                    <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    Custom Video
+                  </button>
+                  <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(e) => handleVideoUpload(e.target.files[0])}
+                  />
+                </div>
+              </div>
+
+              {/* Processing State Banner */}
+              {videoLoading && (
+                <div className="bg-emerald-50 p-8 rounded-2xl border border-emerald-200 text-center space-y-4 shadow-sm animate-pulse">
+                  <div className="w-12 h-12 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                  <div>
+                    <h4 className="text-base font-bold text-emerald-950">Analyzing Highway Surveillance Stream</h4>
+                    <p className="text-xs text-emerald-700 mt-1">
+                      Running YOLOv8 vehicle detection, spatial highway IoU tracking, character OCR recognition, and H.264 stream transcoding...
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {videoError && (
+                <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+                  <svg className="w-4 h-4 flex-shrink-0 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                   </svg>
-                  Upload Video
-                </button>
-                <input
-                  ref={videoInputRef}
-                  type="file"
-                  accept="video/*"
-                  className="hidden"
-                  onChange={(e) => handleVideoUpload(e.target.files[0])}
-                />
-              </div>
-            </div>
-
-            {/* Video Processing State Banner */}
-            {videoLoading && (
-              <div className="bg-emerald-50 p-8 rounded-2xl border border-emerald-200 text-center space-y-4 shadow-sm">
-                <div className="w-12 h-12 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
-                <div>
-                  <h4 className="text-base font-bold text-emerald-950">Analyzing Video Frames with YOLOv8 & PaddleOCR</h4>
-                  <p className="text-xs text-emerald-700 mt-1">Multi-object IoU tracking, frame sampling, OCR consensus voting, and H.264 transcoding in progress...</p>
+                  {videoError}
                 </div>
-              </div>
-            )}
+              )}
 
-            {videoError && (
-              <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
-                <svg className="w-4 h-4 flex-shrink-0 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-                {videoError}
-              </div>
-            )}
+              {/* Main Surveillance Viewport Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Left Column: Live CCTV Stream Player & Controls */}
+                <div className="lg:col-span-7 space-y-4">
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-3">
+                    {videoResult?.video_url ? (
+                      <div className="space-y-3">
+                        {/* Video Player Frame with CCTV HUD Overlay */}
+                        <div className="rounded-xl overflow-hidden bg-slate-950 aspect-video border border-slate-200 shadow-inner relative group">
+                          <video
+                            ref={videoPlayerRef}
+                            key={videoResult.video_url}
+                            src={videoResult.video_url}
+                            controls
+                            autoPlay
+                            loop
+                            onTimeUpdate={(e) => setVideoCurrentTime(e.target.currentTime)}
+                            className="w-full h-full object-contain"
+                          />
 
-            {/* Video Player & Plate Event Timeline */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left: Annotated Video Player */}
-              <div className="lg:col-span-7 space-y-4">
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                  {videoResult?.video_url ? (
-                    <div className="space-y-3">
-                      <div className="rounded-xl overflow-hidden bg-black aspect-video border border-slate-200 shadow-inner relative">
-                        <video
-                          key={videoResult.video_url}
-                          src={videoResult.video_url}
-                          controls
-                          autoPlay
-                          loop
-                          className="w-full h-full object-contain"
-                        />
+                          {/* Top Live Camera Telemetry Overlay */}
+                          <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+                            <div className="bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700 flex items-center gap-2 text-white">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                              <span className="text-[11px] font-mono font-bold tracking-wider text-emerald-400">
+                                CCTV CAM-04 LIVE
+                              </span>
+                              <span className="text-slate-500">|</span>
+                              <span className="text-[10px] font-mono text-slate-300">NH-48 EXP</span>
+                            </div>
+
+                            <div className="bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700 font-mono text-white text-[11px] flex items-center gap-2">
+                              <span className="text-slate-400">FOV:</span>
+                              <span className="font-bold text-emerald-400">{activePlatesInFov.length} active</span>
+                              <span className="text-slate-500">·</span>
+                              <span className="text-slate-300">{loggedPlates.length}/{allPlates.length} logged</span>
+                            </div>
+                          </div>
+
+                          {/* Bottom Real-Time Active Target Lock HUD */}
+                          {activePlatesInFov.length > 0 && (
+                            <div className="absolute bottom-14 left-3 right-3 pointer-events-none transition-all duration-200">
+                              <div className="bg-slate-900/90 backdrop-blur-md border border-emerald-500/80 rounded-xl p-2.5 shadow-xl flex items-center justify-between gap-3 animate-pulse">
+                                <div className="flex items-center gap-2.5">
+                                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400 font-mono text-xs font-bold">
+                                    #{activePlatesInFov[0].track_id}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-white font-mono font-black text-sm tracking-wider">
+                                        {activePlatesInFov[0].plate_number}
+                                      </span>
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/30 text-emerald-300 font-bold border border-emerald-500/50">
+                                        TARGET LOCK
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-300 font-medium">
+                                      {activePlatesInFov[0].state || 'Indian Registered'} · {activePlatesInFov[0].lane}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="text-right font-mono">
+                                  <span className="text-emerald-400 text-xs font-bold block">
+                                    ⚡ {activePlatesInFov[0].speed_kmh || 60} km/h
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {Math.round(activePlatesInFov[0].confidence * 100)}% Conf
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Stream Telemetry & Stats */}
+                        <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 font-mono px-1 py-1 gap-2 border-b border-slate-100 pb-2">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                            Playback: {videoCurrentTime.toFixed(1)}s / {videoResult.duration_sec}s
+                          </span>
+                          <span>Frames: {videoResult.processed_frames} ({videoResult.fps} FPS)</span>
+                          <span>Inference Latency: {videoResult.processing_time_sec}s</span>
+                        </div>
+
+                        {/* Quick Jump Timeline Markers */}
+                        {allPlates.length > 0 && (
+                          <div className="pt-1">
+                            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
+                              Jump to Vehicle Detection Moment:
+                            </span>
+                            <div className="flex flex-wrap gap-2">
+                              {allPlates.map((p) => {
+                                const isCurrent = videoCurrentTime >= p.first_seen_sec - 0.2 && videoCurrentTime <= p.last_seen_sec + 0.4
+                                return (
+                                  <button
+                                    key={p.track_id}
+                                    onClick={() => handleJumpToVehicle(p.first_seen_sec, p.track_id)}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all flex items-center gap-1.5 ${
+                                      isCurrent
+                                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                                        : 'bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 border-slate-200'
+                                    }`}
+                                  >
+                                    <span>#{p.track_id}</span>
+                                    <span className="font-bold">{p.plate_number}</span>
+                                    <span className="text-[10px] opacity-75">({p.first_seen_sec}s)</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex items-center justify-between text-xs text-slate-500 font-mono px-1">
-                        <span>Frames: {videoResult.processed_frames} ({videoResult.fps} FPS)</span>
-                        <span>Duration: {videoResult.duration_sec}s · Processed in {videoResult.processing_time_sec}s</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="aspect-video rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400 p-6 text-center">
-                      <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 mb-3 shadow-xs">
-                        <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                      </div>
-                      <p className="text-sm font-semibold text-slate-700">No video selected</p>
-                      <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                        Upload an MP4 traffic clip or click 'Test Demo Video' above to see real-time ANPR tracking & IoU persistence
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Right: Plate Event Timeline Log */}
-              <div className="lg:col-span-5 space-y-4">
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-full flex flex-col">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                      <span>Vehicle Event Log</span>
-                      {videoResult?.unique_vehicles_detected !== undefined && (
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono font-bold border border-emerald-200">
-                          {videoResult.unique_vehicles_detected} Vehicles
-                        </span>
-                      )}
-                    </h3>
-
-                    {/* Export Actions */}
-                    {videoResult?.plates && videoResult.plates.length > 0 && (
-                      <div className="flex items-center gap-1.5">
+                    ) : (
+                      <div className="aspect-video rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400 p-8 text-center space-y-4">
+                        <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-emerald-600 shadow-sm">
+                          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h4 className="text-base font-bold text-slate-800">No Active Surveillance Stream</h4>
+                          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                            Launch the multi-lane NH-48 Expressway surveillance CCTV stream to observe vehicles tracked in real-time with automatic license plate recognition.
+                          </p>
+                        </div>
                         <button
-                          onClick={exportVideoLogCSV}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-mono border border-slate-200 transition-colors font-medium"
+                          onClick={() => handleSelectSampleVideo('road_surveillance_traffic.mp4')}
+                          className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all"
                         >
-                          CSV
-                        </button>
-                        <button
-                          onClick={exportVideoLogJSON}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-mono border border-slate-200 transition-colors font-medium"
-                        >
-                          JSON
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                          </svg>
+                          Launch NH-48 Road Surveillance Stream
                         </button>
                       </div>
                     )}
                   </div>
+                </div>
 
-                  {videoResult?.plates && videoResult.plates.length > 0 ? (
-                    <div className="space-y-3 flex-1 overflow-y-auto max-h-[500px] pr-1">
-                      {videoResult.plates.map((p) => (
-                        <div
-                          key={p.track_id}
-                          className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/20 transition-all flex items-center justify-between gap-3"
-                        >
-                          <div className="flex items-center gap-3">
-                            {p.thumbnail ? (
-                              <img src={p.thumbnail} alt="Crop" className="w-16 h-10 object-cover rounded-lg border border-slate-200 bg-white" />
-                            ) : (
-                              <div className="w-16 h-10 rounded-lg bg-slate-200 flex items-center justify-center text-[10px] text-slate-500 font-mono">Track</div>
-                            )}
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-sm text-slate-900">{p.plate_number}</span>
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-200 text-slate-700 font-mono font-bold">
-                                  #{p.track_id}
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-slate-500 mt-0.5">
-                                {p.state || 'General Format'} · {p.detections_count} frames
-                              </p>
-                            </div>
+                {/* Right Column: Live Surveillance Vehicle Registry */}
+                <div className="lg:col-span-5 space-y-4">
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm h-full flex flex-col">
+                    {/* Registry Header */}
+                    <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                          <span>Surveillance Registry</span>
+                          {allPlates.length > 0 && (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono font-bold border border-emerald-200">
+                              {displayedPlates.length} / {allPlates.length} Logged
+                            </span>
+                          )}
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {surveillanceMode === 'live' ? 'Auto-updating in sync with CCTV video feed' : 'Showing all detected vehicles'}
+                        </p>
+                      </div>
+
+                      {/* Export Actions */}
+                      {allPlates.length > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={exportVideoLogCSV}
+                            title="Export CSV Log"
+                            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-mono border border-slate-200 transition-colors font-semibold"
+                          >
+                            CSV
+                          </button>
+                          <button
+                            onClick={exportVideoLogJSON}
+                            title="Export JSON Log"
+                            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-mono border border-slate-200 transition-colors font-semibold"
+                          >
+                            JSON
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Feed Mode Toggle & Search Filter Toolbar */}
+                    {allPlates.length > 0 && (
+                      <div className="space-y-2.5 mb-3.5">
+                        <div className="flex items-center justify-between gap-2">
+                          {/* Live vs All Toggle */}
+                          <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs">
+                            <button
+                              onClick={() => setSurveillanceMode('live')}
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                                surveillanceMode === 'live'
+                                  ? 'bg-white text-emerald-800 shadow-xs font-bold'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              🔴 Real-Time Live Feed
+                            </button>
+                            <button
+                              onClick={() => setSurveillanceMode('all')}
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                                surveillanceMode === 'all'
+                                  ? 'bg-white text-slate-900 shadow-xs font-bold'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              📋 Show All ({allPlates.length})
+                            </button>
                           </div>
 
-                          <div className="text-right">
-                            <span className="font-mono text-xs text-emerald-700 block font-bold">
-                              {Math.round(p.confidence * 100)}%
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              {p.first_seen_sec}s - {p.last_seen_sec}s
-                            </span>
+                          {/* Lane Filter */}
+                          <div className="flex items-center gap-1 text-[11px]">
+                            {['ALL', 'Lane 1', 'Lane 2', 'Lane 3'].map((l) => (
+                              <button
+                                key={l}
+                                onClick={() => setVideoFilterLane(l)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-mono ${
+                                  videoFilterLane === l
+                                    ? 'bg-slate-800 text-white font-bold'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                              >
+                                {l}
+                              </button>
+                            ))}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mb-2 text-slate-400">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                        </svg>
+
+                        {/* Search Input */}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={videoSearchTerm}
+                            onChange={(e) => setVideoSearchTerm(e.target.value)}
+                            placeholder="Filter by plate number or state (e.g. KL, AP, JH)..."
+                            className="w-full text-xs px-3 py-1.5 pl-8 rounded-lg bg-slate-50 border border-slate-200 focus:outline-none focus:border-emerald-500 focus:bg-white"
+                          />
+                          <svg className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                          </svg>
+                          {videoSearchTerm && (
+                            <button
+                              onClick={() => setVideoSearchTerm('')}
+                              className="text-[10px] text-slate-400 hover:text-slate-600 absolute right-2.5 top-2"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <p className="text-sm font-semibold text-slate-600">No vehicle events logged</p>
-                      <p className="text-xs text-slate-400 mt-1">Processed vehicles and temporal plate consensus will appear here</p>
-                    </div>
-                  )}
+                    )}
+
+                    {/* Vehicle Registry Cards Feed */}
+                    {displayedPlates.length > 0 ? (
+                      <div className="space-y-3 flex-1 overflow-y-auto max-h-[560px] pr-1">
+                        {displayedPlates.map((p) => {
+                          const isActiveInFov = videoCurrentTime >= (p.first_seen_sec - 0.25) && videoCurrentTime <= (p.last_seen_sec + 0.45)
+                          const isPassed = videoCurrentTime > (p.last_seen_sec + 0.45)
+
+                          return (
+                            <div
+                              key={p.track_id}
+                              onClick={() => handleJumpToVehicle(p.first_seen_sec, p.track_id)}
+                              className={`p-3.5 rounded-xl border transition-all cursor-pointer relative group ${
+                                isActiveInFov
+                                  ? 'bg-emerald-50/70 border-emerald-400 shadow-md ring-1 ring-emerald-400'
+                                  : 'bg-slate-50/80 border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/20'
+                              }`}
+                            >
+                              {/* Top Status & Timestamp Header */}
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  {isActiveInFov ? (
+                                    <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold animate-pulse flex items-center gap-1 shadow-xs">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                      🟢 IN CAMERA FOV
+                                    </span>
+                                  ) : isPassed ? (
+                                    <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-mono font-medium">
+                                      ✅ LOGGED AT {p.first_seen_sec}s
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-mono font-semibold">
+                                      ⏳ APPROACHING
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-mono text-slate-500 font-semibold">
+                                    {p.lane}
+                                  </span>
+                                </div>
+
+                                <div className="text-right font-mono text-[11px]">
+                                  <span className="text-emerald-700 font-bold">
+                                    ⚡ {p.speed_kmh || 60} km/h
+                                  </span>
+                                  <span className="text-slate-400 text-[10px] ml-1">
+                                    ({Math.round(p.confidence * 100)}%)
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Indian HSRP License Plate Visual */}
+                              <div className="flex items-center justify-between gap-3 p-2 bg-white rounded-lg border border-slate-200 mb-2.5">
+                                <div className="license-plate-hsrp px-3 py-1 bg-white">
+                                  <div className="flex flex-col items-center mr-2 border-r border-slate-300 pr-1.5">
+                                    <span className="text-[8px] font-sans font-black text-blue-700 leading-none">IND</span>
+                                    <div className="w-2.5 h-2.5 rounded-full border border-blue-700 flex items-center justify-center mt-0.5">
+                                      <div className="w-1 h-1 rounded-full bg-blue-700"></div>
+                                    </div>
+                                  </div>
+                                  <span className="text-lg sm:text-xl text-slate-950 font-black tracking-widest font-mono">
+                                    {p.plate_number}
+                                  </span>
+                                </div>
+
+                                <div className="text-right">
+                                  <span className="text-[10px] text-slate-400 block uppercase font-bold">State / Region</span>
+                                  <span className="font-bold text-xs text-slate-800">
+                                    {p.state || 'General Format'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Thumbnails Preview: Vehicle Context + Plate Crop */}
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div>
+                                  <span className="text-[10px] text-slate-400 block mb-1">Plate Crop:</span>
+                                  {p.thumbnail ? (
+                                    <img src={p.thumbnail} alt="Plate" className="w-full h-11 object-cover rounded border border-slate-200 bg-white" />
+                                  ) : (
+                                    <div className="w-full h-11 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400 font-mono">Plate</div>
+                                  )}
+                                </div>
+                                <div>
+                                  <span className="text-[10px] text-slate-400 block mb-1">Vehicle View:</span>
+                                  {p.vehicle_crop ? (
+                                    <img src={p.vehicle_crop} alt="Vehicle" className="w-full h-11 object-cover rounded border border-slate-200 bg-white" />
+                                  ) : (
+                                    <div className="w-full h-11 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400 font-mono">Vehicle</div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Action Footer: Jump to video timestamp */}
+                              <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                                <span className="text-slate-500 font-mono text-[10px]">
+                                  Time: {p.first_seen_sec}s - {p.last_seen_sec}s ({p.duration_sec}s)
+                                </span>
+                                <span className="text-emerald-700 font-bold group-hover:underline flex items-center gap-1">
+                                  <span>Seek to car passage</span>
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                                  </svg>
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })}
+
+                        {/* Approaching Vehicles Notice */}
+                        {surveillanceMode === 'live' && upcomingPlates.length > 0 && (
+                          <div className="p-3 rounded-xl bg-slate-50 border border-dashed border-slate-300 text-center text-xs text-slate-500">
+                            <span className="font-semibold text-slate-700">⏳ {upcomingPlates.length} vehicles approaching camera sensor</span>
+                            <p className="text-[10px] text-slate-400 mt-0.5">Will be automatically tracked and logged as the video continues</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400">
+                        <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mb-3 text-slate-400">
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                          </svg>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-700">No vehicles logged yet</p>
+                        <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                          {videoResult
+                            ? 'Play the video stream to observe vehicles as they cross the CCTV camera threshold'
+                            : 'Launch the road surveillance stream above to track passing vehicles'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {/* ========================================================= */}
         {/* TAB 3: NEURAL HEATMAP & ATTENTION ANALYSIS (NEW WORKING DEMO) */}
