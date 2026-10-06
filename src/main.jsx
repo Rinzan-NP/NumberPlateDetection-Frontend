@@ -6,7 +6,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('image') // 'image' | 'heatmap' | 'model' | 'train'
   const [viewMode, setViewMode] = useState('bbox') // 'bbox' | 'heatmap' | 'compare'
   const [modelInfo, setModelInfo] = useState(null)
-  const [samples, setSamples] = useState({ images: [] })
+  const [samples, setSamples] = useState({ images: [], videos: [] })
   const [datasetStats, setDatasetStats] = useState(null)
 
   // Image Detection State
@@ -17,6 +17,15 @@ function App() {
   const [copiedId, setCopiedId] = useState(null)
   const [dragOver, setDragOver] = useState(false)
   const imageInputRef = useRef(null)
+
+  // Video Mode State
+  const [videoFile, setVideoFile] = useState(null)
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState(null)
+  const [videoResult, setVideoResult] = useState(null)
+  const [videoLoading, setVideoLoading] = useState(false)
+  const [videoError, setVideoError] = useState(null)
+  const [videoStride, setVideoStride] = useState(3)
+  const videoInputRef = useRef(null)
 
   // Training Hub State
   const [trainConfig, setTrainConfig] = useState({ epochs: 15, batch: 16, device: 'mps' })
@@ -55,7 +64,7 @@ function App() {
       const res = await fetch('/api/samples')
       if (res.ok) {
         const data = await res.json()
-        setSamples({ images: data.images || [] })
+        setSamples({ images: data.images || [], videos: data.videos || [] })
       }
     } catch (e) {
       console.warn('Failed to load samples:', e)
@@ -134,6 +143,77 @@ function App() {
     setTimeout(() => setCopiedId(null), 1500)
   }
 
+  // --- VIDEO DETECTION HANDLERS ---
+  const handleVideoUpload = async (file) => {
+    if (!file) return
+    setVideoFile(file)
+    setVideoPreviewUrl(URL.createObjectURL(file))
+    setVideoResult(null)
+    setVideoError(null)
+    setVideoLoading(true)
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('stride', videoStride)
+
+    try {
+      const res = await fetch('/api/detect-video', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || 'Video analysis failed')
+      setVideoResult(data)
+    } catch (err) {
+      setVideoError(err.message)
+    } finally {
+      setVideoLoading(false)
+    }
+  }
+
+  const handleSelectSampleVideo = async (sampleName) => {
+    setVideoResult(null)
+    setVideoError(null)
+    setVideoLoading(true)
+
+    const formData = new FormData()
+    formData.append('sample_name', sampleName)
+    formData.append('stride', videoStride)
+
+    try {
+      const res = await fetch('/api/detect-video', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || 'Sample video analysis failed')
+      setVideoResult(data)
+    } catch (err) {
+      setVideoError(err.message)
+    } finally {
+      setVideoLoading(false)
+    }
+  }
+
+  const exportVideoLogJSON = () => {
+    if (!videoResult?.plates) return
+    const blob = new Blob([JSON.stringify(videoResult, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `anpr_video_log_${Date.now()}.json`
+    a.click()
+  }
+
+  const exportVideoLogCSV = () => {
+    if (!videoResult?.plates) return
+    const headers = ['Track ID', 'Plate Number', 'State', 'First Seen (s)', 'Last Seen (s)', 'Duration (s)', 'Confidence', 'Frames Count']
+    const rows = videoResult.plates.map(p => [
+      p.track_id, `"${p.plate_number}"`, `"${p.state || 'N/A'}"`, p.first_seen_sec, p.last_seen_sec, p.duration_sec, `${Math.round(p.confidence * 100)}%`, p.detections_count
+    ])
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `anpr_plate_log_${Date.now()}.csv`
+    a.click()
+  }
+
   // --- TRAINING & DATASET HANDLERS ---
   const handleStartTraining = async () => {
     setTrainLoading(true)
@@ -183,12 +263,12 @@ function App() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-display font-bold text-lg text-slate-900 tracking-tight">AuraPlate ANPR</span>
+                <span className="font-display font-bold text-lg text-slate-900 tracking-tight">Bony Number Plate Detection</span>
                 <span className="px-2 py-0.5 text-[11px] font-mono font-semibold rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
                   YOLOv8 + PaddleOCR
                 </span>
               </div>
-              <p className="text-xs text-slate-500 hidden sm:block">Automated License Plate Recognition & Heatmap Analytics</p>
+              {/* <p className="text-xs text-slate-500 hidden sm:block">Automated License Plate Recognition & Heatmap Analytics</p> */}
             </div>
           </div>
 
@@ -203,10 +283,11 @@ function App() {
           </div>
         </div>
 
-        {/* Navigation Tabs (Light Theme - Video & Camera Removed) */}
+        {/* Navigation Tabs (Light Theme - Video ANPR Unhidden) */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-2 border-t border-slate-100 overflow-x-auto">
           {[
             { id: 'image', label: 'License Plate Recognition', icon: 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z' },
+            { id: 'video', label: 'Video Tracking & Surveillance', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
             { id: 'heatmap', label: 'Neural Heatmap & Attention', icon: 'M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z' },
             { id: 'model', label: 'Model Metrics & Architecture', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
             { id: 'train', label: 'Dataset & Training Hub', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
@@ -540,7 +621,219 @@ function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 2: NEURAL HEATMAP & ATTENTION ANALYSIS (NEW WORKING DEMO) */}
+        {/* TAB 2: VIDEO TRACKING & SURVEILLANCE */}
+        {/* ========================================================= */}
+        {activeTab === 'video' && (
+          <div className="space-y-6">
+            {/* Video Controls & Presets */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                  <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  Video ANPR & Multi-Object Vehicle Tracker
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">Tracks vehicles across video frames using IoU matching and performs temporal OCR consensus voting</p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {/* Frame Stride Selector */}
+                <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
+                  <span className="text-slate-500 font-medium">Stride:</span>
+                  {[2, 3, 4].map(s => (
+                    <button
+                      key={s}
+                      onClick={() => setVideoStride(s)}
+                      className={`px-2 py-0.5 rounded font-mono ${
+                        videoStride === s ? 'bg-emerald-600 text-white font-bold' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {s}x
+                    </button>
+                  ))}
+                </div>
+
+                {/* Preset Sample Video Button */}
+                {samples.videos && samples.videos.length > 0 && (
+                  <button
+                    onClick={() => handleSelectSampleVideo(samples.videos[0].name)}
+                    disabled={videoLoading}
+                    className="px-4 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-xs font-semibold text-emerald-800 border border-emerald-300 flex items-center gap-2 transition-all shadow-xs"
+                  >
+                    <svg className="w-4 h-4 text-emerald-600" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                    </svg>
+                    Test Demo Video
+                  </button>
+                )}
+
+                <button
+                  onClick={() => videoInputRef.current?.click()}
+                  disabled={videoLoading}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-500/20 flex items-center gap-2 transition-all"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  Upload Video
+                </button>
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/*"
+                  className="hidden"
+                  onChange={(e) => handleVideoUpload(e.target.files[0])}
+                />
+              </div>
+            </div>
+
+            {/* Video Processing State Banner */}
+            {videoLoading && (
+              <div className="bg-emerald-50 p-8 rounded-2xl border border-emerald-200 text-center space-y-4 shadow-sm">
+                <div className="w-12 h-12 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                <div>
+                  <h4 className="text-base font-bold text-emerald-950">Analyzing Video Frames with YOLOv8 & PaddleOCR</h4>
+                  <p className="text-xs text-emerald-700 mt-1">Multi-object IoU tracking, frame sampling, OCR consensus voting, and H.264 transcoding in progress...</p>
+                </div>
+              </div>
+            )}
+
+            {videoError && (
+              <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+                <svg className="w-4 h-4 flex-shrink-0 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                {videoError}
+              </div>
+            )}
+
+            {/* Video Player & Plate Event Timeline */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left: Annotated Video Player */}
+              <div className="lg:col-span-7 space-y-4">
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  {videoResult?.video_url ? (
+                    <div className="space-y-3">
+                      <div className="rounded-xl overflow-hidden bg-black aspect-video border border-slate-200 shadow-inner relative">
+                        <video
+                          key={videoResult.video_url}
+                          src={videoResult.video_url}
+                          controls
+                          autoPlay
+                          loop
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-slate-500 font-mono px-1">
+                        <span>Frames: {videoResult.processed_frames} ({videoResult.fps} FPS)</span>
+                        <span>Duration: {videoResult.duration_sec}s · Processed in {videoResult.processing_time_sec}s</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="aspect-video rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400 p-6 text-center">
+                      <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 mb-3 shadow-xs">
+                        <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-700">No video selected</p>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                        Upload an MP4 traffic clip or click 'Test Demo Video' above to see real-time ANPR tracking & IoU persistence
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: Plate Event Timeline Log */}
+              <div className="lg:col-span-5 space-y-4">
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-full flex flex-col">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span>Vehicle Event Log</span>
+                      {videoResult?.unique_vehicles_detected !== undefined && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono font-bold border border-emerald-200">
+                          {videoResult.unique_vehicles_detected} Vehicles
+                        </span>
+                      )}
+                    </h3>
+
+                    {/* Export Actions */}
+                    {videoResult?.plates && videoResult.plates.length > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={exportVideoLogCSV}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-mono border border-slate-200 transition-colors font-medium"
+                        >
+                          CSV
+                        </button>
+                        <button
+                          onClick={exportVideoLogJSON}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-mono border border-slate-200 transition-colors font-medium"
+                        >
+                          JSON
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {videoResult?.plates && videoResult.plates.length > 0 ? (
+                    <div className="space-y-3 flex-1 overflow-y-auto max-h-[500px] pr-1">
+                      {videoResult.plates.map((p) => (
+                        <div
+                          key={p.track_id}
+                          className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/20 transition-all flex items-center justify-between gap-3"
+                        >
+                          <div className="flex items-center gap-3">
+                            {p.thumbnail ? (
+                              <img src={p.thumbnail} alt="Crop" className="w-16 h-10 object-cover rounded-lg border border-slate-200 bg-white" />
+                            ) : (
+                              <div className="w-16 h-10 rounded-lg bg-slate-200 flex items-center justify-center text-[10px] text-slate-500 font-mono">Track</div>
+                            )}
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-sm text-slate-900">{p.plate_number}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-200 text-slate-700 font-mono font-bold">
+                                  #{p.track_id}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                {p.state || 'General Format'} · {p.detections_count} frames
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right">
+                            <span className="font-mono text-xs text-emerald-700 block font-bold">
+                              {Math.round(p.confidence * 100)}%
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {p.first_seen_sec}s - {p.last_seen_sec}s
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400">
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mb-2 text-slate-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-600">No vehicle events logged</p>
+                      <p className="text-xs text-slate-400 mt-1">Processed vehicles and temporal plate consensus will appear here</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB 3: NEURAL HEATMAP & ATTENTION ANALYSIS (NEW WORKING DEMO) */}
         {/* ========================================================= */}
         {activeTab === 'heatmap' && (
           <div className="space-y-6">
@@ -766,7 +1059,7 @@ function App() {
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
                   <span className="text-xs text-slate-500 font-semibold">Total Images</span>
                   <div className="text-2xl font-bold font-mono text-slate-900 mt-1">
-                    {datasetStats?.total_images || 929}
+                    {datasetStats?.total_images || 2694}
                   </div>
                   <span className="text-[10px] text-emerald-700 font-mono font-bold">100% Annotated</span>
                 </div>
